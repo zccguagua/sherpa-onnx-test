@@ -1,0 +1,180 @@
+package com.zcc.sherpaonnoxtest
+
+import android.content.Context
+import android.os.Bundle
+import android.view.LayoutInflater
+import android.view.View
+import android.view.ViewGroup
+import android.widget.Button
+import android.widget.EditText
+import android.widget.TextView
+import android.widget.Toast
+import androidx.appcompat.app.AlertDialog
+import androidx.fragment.app.Fragment
+import androidx.recyclerview.widget.ItemTouchHelper
+import androidx.recyclerview.widget.LinearLayoutManager
+import androidx.recyclerview.widget.RecyclerView
+import org.json.JSONArray
+
+/**
+ * 常用语：点击用 sherpa-onnx 离线朗读（喇叭闪烁动画），支持拖拽排序、侧滑露出删除按钮、新增。
+ * 数据用 SharedPreferences + JSON 持久化，首次启动预置几条默认用语。
+ * 朗读复用全局的 [SherpaTtsEngine]，与「朗读」页共享同一个模型与音色设置。
+ */
+class PhrasesFragment : Fragment() {
+
+    private lateinit var rvPhrases: RecyclerView
+    private lateinit var tvPhraseEmpty: TextView
+    private lateinit var btnAddPhrase: Button
+    private lateinit var adapter: PhraseAdapter
+    private lateinit var touchCallback: SwipeRevealCallback
+
+    private val phrases = mutableListOf<String>()
+    private lateinit var prefs: android.content.SharedPreferences
+
+    override fun onCreateView(
+        inflater: LayoutInflater,
+        container: ViewGroup?,
+        savedInstanceState: Bundle?,
+    ): View = inflater.inflate(R.layout.fragment_phrases, container, false)
+
+    override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
+        rvPhrases = view.findViewById(R.id.rvPhrases)
+        tvPhraseEmpty = view.findViewById(R.id.tvPhraseEmpty)
+        btnAddPhrase = view.findViewById(R.id.btnAddPhrase)
+
+        prefs = requireContext().getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+
+        adapter = PhraseAdapter(
+            phrases = phrases,
+            onClick = { phrase ->
+                touchCallback.closeOpen()
+                speakPhrase(phrase)
+            },
+            onDelete = { position -> deletePhrase(position) },
+        )
+        rvPhrases.layoutManager = LinearLayoutManager(requireContext())
+        rvPhrases.adapter = adapter
+
+        val revealWidth = (88 * requireContext().resources.displayMetrics.density).toInt()
+        touchCallback = SwipeRevealCallback(adapter, revealWidth) { savePhrases() }
+        ItemTouchHelper(touchCallback).attachToRecyclerView(rvPhrases)
+
+        btnAddPhrase.setOnClickListener { showAddDialog() }
+
+        loadPhrases()
+
+        // 触发一次 TTS 模型加载（若「朗读」页已加载则直接复用）
+        SherpaTtsEngine.init(requireContext().applicationContext.assets)
+    }
+
+    private fun speakPhrase(text: String) {
+        if (SherpaTtsEngine.state != SherpaTtsEngine.State.READY) {
+            toast(getString(R.string.phrases_tts_not_ready))
+            return
+        }
+        adapter.playingText = text
+        SherpaTtsEngine.speak(text, object : SherpaTtsEngine.Callback {
+            override fun onStart() = Unit
+
+            override fun onDone() {
+                if (adapter.playingText == text) adapter.playingText = null
+            }
+
+            override fun onError(message: String) {
+                if (adapter.playingText == text) adapter.playingText = null
+            }
+        })
+    }
+
+    private fun deletePhrase(position: Int) {
+        adapter.onItemRemoved(position)
+        touchCallback.closeOpen()
+        savePhrases()
+        toast(getString(R.string.phrases_deleted))
+    }
+
+    private fun showAddDialog() {
+        val editText = EditText(requireContext()).apply {
+            hint = getString(R.string.phrases_add_hint)
+            isSingleLine = true
+            val p = dp(20)
+            setPadding(p, p, p, p)
+        }
+
+        AlertDialog.Builder(requireContext())
+            .setTitle(R.string.phrases_add_title)
+            .setView(editText)
+            .setPositiveButton(R.string.phrases_confirm) { _, _ ->
+                val text = editText.text.toString().trim()
+                if (text.isNotEmpty()) {
+                    phrases.add(text)
+                    adapter.notifyItemInserted(phrases.size - 1)
+                    rvPhrases.scrollToPosition(phrases.size - 1)
+                    savePhrases()
+                }
+            }
+            .setNegativeButton(R.string.phrases_cancel, null)
+            .show()
+    }
+
+    private fun loadPhrases() {
+        phrases.clear()
+        val raw = prefs.getString(KEY_PHRASES, null)
+        if (raw == null) {
+            phrases.addAll(DEFAULT_PHRASES)
+            savePhrases()
+        } else {
+            try {
+                val array = JSONArray(raw)
+                for (i in 0 until array.length()) {
+                    phrases.add(array.getString(i))
+                }
+            } catch (_: Exception) {
+                phrases.addAll(DEFAULT_PHRASES)
+            }
+        }
+        adapter.notifyDataSetChanged()
+        updateEmpty()
+    }
+
+    private fun savePhrases() {
+        val array = JSONArray()
+        for (phrase in phrases) {
+            array.put(phrase)
+        }
+        prefs.edit().putString(KEY_PHRASES, array.toString()).apply()
+        updateEmpty()
+    }
+
+    private fun updateEmpty() {
+        tvPhraseEmpty.visibility = if (phrases.isEmpty()) View.VISIBLE else View.GONE
+    }
+
+    private fun dp(value: Int): Int =
+        (value * requireContext().resources.displayMetrics.density).toInt()
+
+    private fun toast(msg: String) {
+        Toast.makeText(requireContext(), msg, Toast.LENGTH_SHORT).show()
+    }
+
+    private companion object {
+        const val PREFS_NAME = "phrases"
+        const val KEY_PHRASES = "phrases"
+
+        val DEFAULT_PHRASES = listOf(
+            "你好",
+            "谢谢",
+            "麻烦再说一遍",
+            "好的，没问题",
+            "别客气",
+            "注意安全",
+            "天气怎么样",
+            "我爱你",
+            "早上好！",
+            "中午好！",
+            "晚上好！",
+            "你弄啥捏",
+        )
+    }
+}

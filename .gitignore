@@ -1,0 +1,26 @@
+# IntelliJ / Android Studio 工程文件（含本机 JDK、主题、userId 等个人配置）
+*.iml
+/.idea/
+
+# Gradle
+.gradle
+/build
+/app/build
+.kotlin/
+
+# 本机 SDK 路径，因机器而异
+local.properties
+
+# Native
+.externalNativeBuild
+.cxx
+
+# 其他
+.DS_Store
+/captures
+
+# 离线模型（体积过大，超出 GitHub 单文件 100MB 限制，需用 download_models.py 本地下载）
+/app/src/main/assets/
+
+# 模型原始下载包
+/*.tar.bz2
