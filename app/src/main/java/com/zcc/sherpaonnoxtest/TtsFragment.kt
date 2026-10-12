@@ -90,7 +90,7 @@ class TtsFragment : Fragment() {
         }
 
         // 加载模型（若「常用语」页已在加载则复用），并监听状态
-        SherpaTtsEngine.init(requireContext().applicationContext.assets)
+        SherpaTtsEngine.init(requireContext().applicationContext)
         SherpaTtsEngine.addStateListener(stateListener)
     }
 

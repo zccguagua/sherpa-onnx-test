@@ -1,5 +1,6 @@
 package com.zcc.sherpaonnoxtest
 
+import android.content.Context
 import android.content.res.AssetManager
 import android.media.AudioAttributes
 import android.media.AudioFormat
@@ -8,8 +9,11 @@ import android.os.Handler
 import android.os.Looper
 import com.k2fsa.sherpa.onnx.OfflineTts
 import com.k2fsa.sherpa.onnx.OfflineTtsConfig
+import com.k2fsa.sherpa.onnx.OfflineTtsMatchaModelConfig
 import com.k2fsa.sherpa.onnx.OfflineTtsModelConfig
-import com.k2fsa.sherpa.onnx.OfflineTtsVitsModelConfig
+import java.io.File
+import java.io.FileNotFoundException
+import java.io.FileOutputStream
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.atomic.AtomicInteger
 
@@ -25,9 +29,27 @@ object SherpaTtsEngine {
 
     /**
      * TTS 模型目录名（位于 assets 下）。换模型时改这里，并在 assets 放入对应文件。
-     * 默认：sherpa-onnx-vits-zh-ll（中文，5 个音色，16kHz，约 115MB）。
+     * 当前：matcha-icefall-zh-en（中英混读，单音色，16kHz，声学模型约 79MB + 声码器约 51MB）。
      */
-    const val MODEL_DIR = "sherpa-onnx-vits-zh-ll"
+    const val MODEL_DIR = "matcha-icefall-zh-en"
+
+    /** Matcha 声码器文件名，需放在 assets 根目录（不在 [MODEL_DIR] 下）。 */
+    private const val VOCODER_FILE = "vocos-16khz-univ.onnx"
+
+    /** 文本归一化规则候选（数字/日期/电话），按在模型目录中是否存在自动启用。 */
+    private val RULE_FST_CANDIDATES = listOf(
+        "phone-zh.fst", "date-zh.fst", "number-zh.fst",
+        "phone.fst", "date.fst", "number.fst",
+    )
+
+    /**
+     * espeak-ng-data 在 assets 中的相对路径。
+     * 它是目录，espeak-ng 只能读文件系统，故运行时须先复制到应用私有目录再交给引擎。
+     */
+    private const val ESPEAK_ASSET_DIR = "$MODEL_DIR/espeak-ng-data"
+
+    /** 复制完成后用于判断数据目录是否就绪的哨兵文件。 */
+    private const val ESPEAK_SENTINEL = "phontab"
 
     enum class State { IDLE, LOADING, READY, FAILED }
 
@@ -86,18 +108,24 @@ object SherpaTtsEngine {
 
     /** 首次调用时在子线程加载模型；之后重复调用直接返回。 */
     @Synchronized
-    fun init(assets: AssetManager) {
+    fun init(context: Context) {
         if (initialized) return
         initialized = true
         setState(State.LOADING)
+        val appContext = context.applicationContext
         Thread {
             try {
+                val assets = appContext.assets
+                // espeak-ng-data 是目录，无法从 assets 直接读取，先复制到应用私有目录
+                val dataDir = ensureEspeakDataDir(appContext)
                 val config = OfflineTtsConfig(
                     model = OfflineTtsModelConfig(
-                        vits = OfflineTtsVitsModelConfig(
-                            model = "$MODEL_DIR/model.onnx",
+                        matcha = OfflineTtsMatchaModelConfig(
+                            acousticModel = "$MODEL_DIR/model-steps-3.onnx",
+                            vocoder = VOCODER_FILE,
                             lexicon = "$MODEL_DIR/lexicon.txt",
                             tokens = "$MODEL_DIR/tokens.txt",
+                            dataDir = dataDir,
                         ),
                         numThreads = 2,
                         debug = false,
@@ -118,12 +146,10 @@ object SherpaTtsEngine {
     }
 
     /** 收集模型目录中实际存在的文本归一化规则（数字/日期/电话），不存在就跳过。 */
-    private fun existingRuleFsts(assets: AssetManager, dir: String): String {
-        val candidates = listOf("phone.fst", "date.fst", "number.fst")
-        return candidates
+    private fun existingRuleFsts(assets: AssetManager, dir: String): String =
+        RULE_FST_CANDIDATES
             .filter { assetExists(assets, "$dir/$it") }
             .joinToString(",") { "$dir/$it" }
-    }
 
     private fun assetExists(assets: AssetManager, path: String): Boolean =
         try {
@@ -132,6 +158,38 @@ object SherpaTtsEngine {
         } catch (_: Exception) {
             false
         }
+
+    /**
+     * 确保 espeak-ng-data 已从 assets 复制到应用私有目录，返回其绝对路径。
+     * 已复制过（存在哨兵文件）则直接复用，避免每次启动重复拷贝约 17MB。
+     */
+    private fun ensureEspeakDataDir(context: Context): String {
+        val root = context.getExternalFilesDir(null) ?: context.filesDir
+        val dest = File(root, ESPEAK_ASSET_DIR)
+        if (File(dest, ESPEAK_SENTINEL).exists()) return dest.absolutePath
+        dest.deleteRecursively()
+        copyAssetDir(context.assets, ESPEAK_ASSET_DIR, dest)
+        return dest.absolutePath
+    }
+
+    /** 递归复制 assets 中的文件或目录到 [dest]（assets 里的目录无法被原生库直接读取）。 */
+    private fun copyAssetDir(assets: AssetManager, assetPath: String, dest: File) {
+        val children = assets.list(assetPath)
+        if (!children.isNullOrEmpty()) {
+            dest.mkdirs()
+            for (child in children) copyAssetDir(assets, "$assetPath/$child", File(dest, child))
+            return
+        }
+        try {
+            dest.parentFile?.mkdirs()
+            assets.open(assetPath).use { input ->
+                FileOutputStream(dest).use { output -> input.copyTo(output) }
+            }
+        } catch (_: FileNotFoundException) {
+            // 空目录：当作目录创建即可
+            dest.mkdirs()
+        }
+    }
 
     /** 合成并播放 [text]，会打断上一次朗读。回调都在主线程。 */
     fun speak(text: String, callback: Callback) {

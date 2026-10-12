@@ -65,7 +65,7 @@ class PhrasesFragment : Fragment() {
         loadPhrases()
 
         // 触发一次 TTS 模型加载（若「朗读」页已加载则直接复用）
-        SherpaTtsEngine.init(requireContext().applicationContext.assets)
+        SherpaTtsEngine.init(requireContext().applicationContext)
     }
 
     private fun speakPhrase(text: String) {

@@ -4,7 +4,7 @@
 [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx)**。项目从 `TtsTest` 提取而来，去掉了
 系统 TTS 引擎、拍照识别（OCR）和悬浮窗朗读，只保留三个页面：
 
-- **朗读**：输入文字，用 sherpa-onnx 离线合成并朗读，可调速、可切换音色（多说话人模型）。
+- **朗读**：输入文字，用 sherpa-onnx 离线合成并朗读，可调速（多说话人模型还可切换音色）。
 - **语音识别**：按住说话、松开识别，用 sherpa-onnx 的 SenseVoice 模型离线识别，保留识别历史。
 - **常用语**：点击即朗读（复用同一套 TTS 模型），支持拖拽排序、侧滑删除、新增。
 
@@ -13,7 +13,8 @@
 ```
 app/src/main/
 ├── assets/                       # 离线模型（体积大，未入库，需自行下载）
-│   ├── sherpa-onnx-vits-zh-ll/                       # TTS 模型
+│   ├── matcha-icefall-zh-en/                         # TTS 声学模型（Matcha-TTS）
+│   ├── vocos-16khz-univ.onnx                          # TTS 声码器（Matcha 必需，放 assets 根目录）
 │   └── sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2024-07-17/   # ASR 模型
 ├── java/com/zcc/sherpaonnoxtest/
 │   ├── MainActivity.kt           # 底部导航 + 3 个 Fragment
@@ -49,11 +50,15 @@ python download_models.py --all
 <https://github.com/k2-fsa/sherpa-onnx/releases/tag/tts-models>（TTS）
 <https://github.com/k2-fsa/sherpa-onnx/releases/tag/asr-models>（ASR）
 
-### 默认 TTS 模型：`sherpa-onnx-vits-zh-ll`
+### 默认 TTS 模型：`matcha-icefall-zh-en`
 
-- 中文，**5 个音色**（可在「朗读」页切换），16kHz，约 115MB，质量与体积均衡。
-- 需要的文件：`model.onnx`、`lexicon.txt`、`tokens.txt`，以及可选的 `number.fst` / `date.fst`
-  （用于数字、日期读法；存在才会启用，缺失自动忽略）。
+- 基于 Matcha-TTS，**中英混读**，单音色，16kHz，声学模型约 79MB。
+- 需要的文件：`model-steps-3.onnx`、`lexicon.txt`、`tokens.txt`，以及可选的
+  `phone-zh.fst` / `date-zh.fst` / `number-zh.fst`（数字、日期读法；存在才启用，缺失自动忽略）。
+- **需要额外的声码器** `vocos-16khz-univ.onnx`（约 51MB），放在 assets 根目录，
+  而不是模型目录内；缺少它会导致加载失败。下载脚本会自动处理。
+- 模型目录内的 `espeak-ng-data/`（英文音素化，约 17MB）无法从 assets 直接读取，
+  App 首次启动时会自动复制到应用私有目录后再加载。
 
 ### 想换别的 TTS 模型？
 
@@ -61,12 +66,15 @@ python download_models.py --all
 
 | 模型 | 大小 | 音色数 | 采样率 | 特点 |
 |---|---|---|---|---|
-| `sherpa-onnx-vits-zh-ll` | ~115MB | 5 | 16kHz | 默认，均衡 |
+| `matcha-icefall-zh-en` | ~79MB + 声码器 ~51MB | 1 | 16kHz | 默认，中英混读，需配声码器 |
+| `sherpa-onnx-vits-zh-ll` | ~115MB | 5 | 16kHz | 中文，多音色 |
 | `vits-icefall-zh-aishell3` | ~29MB | 174 | 8kHz | 最小、音色最多，音质偏低 |
-| `vits-melo-tts-zh_en` | ~163MB | 1 | 44.1kHz | 音质最好，可中英混读，单音色 |
+| `vits-melo-tts-zh_en` | ~167MB | 1 | 44.1kHz | 中文+英文，音质好，单音色 |
 
-> 注意：不同模型的内部文件名可能不同（例如 `model.onnx` 可能叫 `vits-zh-hf-fanchen-C.onnx`），
-> 换模型时若文件名不一致，需同时调整 `SherpaTtsEngine` 里的路径。
+> 注意：不同模型的配置方式不同。VITS 用 `vits = OfflineTtsVitsModelConfig(...)`；Matcha 用
+> `matcha = OfflineTtsMatchaModelConfig(...)` 且必须指定声码器；部分模型还需把 `espeak-ng-data`
+> 或 `dict/` 等目录复制出 assets。内部文件名也可能不同（如 `model.onnx` vs `model-steps-3.onnx`），
+> 换模型时需同步调整 `SherpaTtsEngine`。
 
 ### 默认 ASR 模型
 
@@ -83,7 +91,7 @@ python download_models.py --all
 ```
 
 > 首次构建需联网下载 Gradle 依赖。装好模型后 debug 安装包体积会明显增大
-> （ASR 约 240MB + TTS 约 115MB）。
+> （ASR 约 240MB + TTS 约 130MB）。
 
 ## 与 TtsTest 的关系
 
